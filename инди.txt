@@ -1,0 +1,621 @@
+// QuantumTrade PRO v1.0 - Профессиональный индикатор для криптотрейдинга
+// @version=5
+strategy("QuantumTrade PRO", shorttitle="QTPRO", overlay=true, pyramiding=0, 
+         default_qty_type=strategy.percent_of_equity, default_qty_value=10, 
+         initial_capital=10000, currency=currency.USD, commission_type=strategy.commission.percent,
+         commission_value=0.075, max_bars_back=5000)
+
+//------------------------------ ОСНОВНЫЕ НАСТРОЙКИ ------------------------------//
+var g_header = "⚡ QuantumTrade PRO - Профессиональный трейдинг"
+
+// Группа режима работы
+var g_mode = "🛠️ Режим работы"
+useStrategy = input.bool(false, "Использовать как торговую стратегию (бэктест)", group=g_mode, tooltip="Включите для бэктестинга и автоматической торговли")
+useAlerts = input.bool(true, "Генерировать уведомления", group=g_mode)
+riskPerTrade = input.float(1.0, "Риск на сделку (%)", minval=0.1, maxval=10.0, step=0.1, group=g_mode, tooltip="Процент капитала, используемый на одну сделку")
+enableML = input.bool(true, "Использовать адаптивные алгоритмы", group=g_mode, tooltip="Включает адаптивный механизм на основе статистического анализа")
+
+// Система управления рисками
+var g_risk = "⚠️ Управление рисками"
+useStopLoss = input.bool(true, "Использовать стоп-лосс", group=g_risk)
+useTakeProfit = input.bool(true, "Использовать тейк-профит", group=g_risk)
+useTrailingStop = input.bool(true, "Использовать трейлинг-стоп", group=g_risk)
+stopLossPercent = input.float(2.0, "Стоп-лосс (%)", minval=0.5, maxval=10.0, step=0.1, group=g_risk)
+takeProfitPercent = input.float(3.0, "Тейк-профит (%)", minval=0.5, maxval=20.0, step=0.1, group=g_risk)
+trailingStopPercent = input.float(1.5, "Трейлинг-стоп (%)", minval=0.5, maxval=10.0, step=0.1, group=g_risk)
+
+// Группа параметров индикаторов
+var g_indicators = "📊 Индикаторы"
+// MA настройки
+var g_ma = "📈 Скользящие средние"
+fastLength = input.int(9, "Быстрая MA (периоды)", minval=1, group=g_ma)
+slowLength = input.int(21, "Медленная MA (периоды)", minval=1, group=g_ma)
+longLength = input.int(50, "Длинная MA (периоды)", minval=1, group=g_ma)
+fastType = input.string("EMA", "Тип быстрой MA", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "ALMA"], group=g_ma)
+slowType = input.string("EMA", "Тип медленной MA", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "ALMA"], group=g_ma)
+longType = input.string("SMA", "Тип длинной MA", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "ALMA"], group=g_ma)
+
+// Группа осцилляторов
+var g_osc = "🔄 Осцилляторы"
+rsiLength = input.int(14, "RSI (периоды)", minval=1, group=g_osc)
+rsiOverbought = input.int(70, "RSI уровень перекупленности", minval=50, maxval=100, group=g_osc)
+rsiOversold = input.int(30, "RSI уровень перепроданности", minval=0, maxval=50, group=g_osc)
+useMACD = input.bool(true, "Использовать MACD", group=g_osc)
+macdFast = input.int(12, "MACD быстрая линия", minval=1, group=g_osc)
+macdSlow = input.int(26, "MACD медленная линия", minval=1, group=g_osc)
+macdSignal = input.int(9, "MACD сигнальная линия", minval=1, group=g_osc)
+
+// Группа объемных индикаторов
+var g_vol = "📊 Объемные индикаторы"
+useVolume = input.bool(true, "Учитывать объем в анализе", group=g_vol)
+volumeLength = input.int(20, "Период для анализа объема", group=g_vol)
+obv_length = input.int(14, "OBV SMA (периоды)", group=g_vol, tooltip="On-Balance Volume сглаживание")
+mfi_length = input.int(14, "MFI (периоды)", group=g_vol, tooltip="Money Flow Index")
+
+// Мультитаймфрейм-анализ
+var g_mtf = "⏱️ Мультитаймфрейм"
+useMTF = input.bool(true, "Использовать мультитаймфрейм-анализ", group=g_mtf)
+mtfRatio = input.string("4", "Коэффициент старшего таймфрейма", options=["2", "3", "4", "6", "8", "12", "16", "24"], group=g_mtf)
+
+// Идентификация уровней
+var g_levels = "🔍 Уровни и зоны"
+useSR = input.bool(true, "Показывать уровни поддержки и сопротивления", group=g_levels)
+srPeriod = input.int(14, "Период для поиска уровней", minval=5, group=g_levels)
+srDistance = input.float(1.0, "Минимальное расстояние между уровнями (%)", minval=0.1, group=g_levels)
+srStrength = input.int(3, "Минимальная сила уровня (касания)", minval=2, group=g_levels)
+
+// Визуальные настройки
+var g_visual = "🎨 Визуализация"
+colorMode = input.string("Динамический", "Режим отображения", options=["Динамический", "Фиксированный"], group=g_visual)
+baseColor = input.color(#2962FF, "Основной цвет", group=g_visual)
+buyColor = input.color(#00E676, "Цвет сигнала покупки", group=g_visual)
+sellColor = input.color(#FF1744, "Цвет сигнала продажи", group=g_visual)
+showLabels = input.bool(true, "Показывать метки на графике", group=g_visual)
+showDashboard = input.bool(true, "Показывать панель управления", group=g_visual)
+dashboardPosition = input.string("Правый нижний", "Позиция панели", 
+                               options=["Левый верхний", "Правый верхний", "Левый нижний", "Правый нижний"], 
+                               group=g_visual)
+
+// Данные для уведомлений
+var g_alerts = "🔔 Настройки уведомлений"
+alertFrequency = input.string("Каждый сигнал", "Частота уведомлений", 
+                             options=["Каждый сигнал", "Только сильные сигналы", "Один раз за тренд"], 
+                             group=g_alerts)
+alertSound = input.string("Звук уведомления", options=["Нет", "Тихий", "Средний", "Громкий"], group=g_alerts)
+
+//------------------------------ ФУНКЦИИ ------------------------------//
+// Функция для получения значения MA нужного типа
+getMA(source, length, type) =>
+    switch type
+        "SMA" => ta.sma(source, length)
+        "EMA" => ta.ema(source, length)
+        "WMA" => ta.wma(source, length)
+        "VWMA" => ta.vwma(source, length)
+        "HMA" => ta.hma(source, length)
+        "ALMA" => ta.alma(source, length, 0.85, 6)
+        => ta.sma(source, length)  // По умолчанию SMA
+
+// Функция для получения данных с другого таймфрейма
+getMtfData(source, ratio) =>
+    tf = switch ratio
+        "2" => timeframe.period + ":2"
+        "3" => timeframe.period + ":3"
+        "4" => timeframe.period + ":4"
+        "6" => timeframe.period + ":6"
+        "8" => timeframe.period + ":8"
+        "12" => timeframe.period + ":12"
+        "16" => timeframe.period + ":16"
+        "24" => timeframe.period + ":24"
+        => timeframe.period + ":4"
+    request.security(syminfo.tickerid, tf, source)
+
+// Функция для определения уровней поддержки и сопротивления
+detectSRLevels(lookback, minStrength, distancePercent) =>
+    var pivotHighs = array.new_float(0)
+    var pivotLows = array.new_float(0)
+    var pivotHighStrength = array.new_int(0)
+    var pivotLowStrength = array.new_int(0)
+    
+    // Находим вершины и впадины
+    ph = ta.pivothigh(high, lookback, lookback)
+    pl = ta.pivotlow(low, lookback, lookback)
+    
+    // Добавляем новую вершину
+    if not na(ph)
+        array.push(pivotHighs, ph)
+        array.push(pivotHighStrength, 1)
+    
+    // Добавляем новую впадину
+    if not na(pl)
+        array.push(pivotLows, pl)
+        array.push(pivotLowStrength, 1)
+    
+    // Проверяем близость цены к существующим уровням
+    for i = 0 to array.size(pivotHighs) - 1
+        level = array.get(pivotHighs, i)
+        strength = array.get(pivotHighStrength, i)
+        
+        // Если цена приблизилась к уровню сопротивления
+        if high >= level * (1 - distancePercent / 100) and high <= level * (1 + distancePercent / 100)
+            array.set(pivotHighStrength, i, strength + 1)
+    
+    for i = 0 to array.size(pivotLows) - 1
+        level = array.get(pivotLows, i)
+        strength = array.get(pivotLowStrength, i)
+        
+        // Если цена приблизилась к уровню поддержки
+        if low >= level * (1 - distancePercent / 100) and low <= level * (1 + distancePercent / 100)
+            array.set(pivotLowStrength, i, strength + 1)
+    
+    // Отфильтровываем только сильные уровни
+    var resistanceLevels = array.new_float(0)
+    var supportLevels = array.new_float(0)
+    
+    for i = 0 to array.size(pivotHighs) - 1
+        if array.get(pivotHighStrength, i) >= minStrength
+            array.push(resistanceLevels, array.get(pivotHighs, i))
+    
+    for i = 0 to array.size(pivotLows) - 1
+        if array.get(pivotLowStrength, i) >= minStrength
+            array.push(supportLevels, array.get(pivotLows, i))
+            
+    [resistanceLevels, supportLevels]
+
+// Функция для прогнозирования на основе статистического анализа (упрощенное "ML")
+predictiveTrend(price, fastMA, slowMA, longMA, rsi, macd, signal) =>
+    // Вычисляем коэффициенты для различных факторов на основе исторических данных
+    var recentSuccess = array.new_float(20, 0.5)  // Массив для хранения последних успешных сигналов (0-1)
+    var totalWeight = 0.0
+    
+    // 1. Оцениваем текущее положение цены по отношению к MA
+    ma_factor = fastMA > slowMA and slowMA > longMA ? 1.0 : 
+                fastMA < slowMA and slowMA < longMA ? -1.0 :
+                fastMA > slowMA and slowMA < longMA ? 0.3 :
+                fastMA < slowMA and slowMA > longMA ? -0.3 : 0.0
+                
+    // 2. RSI фактор
+    rsi_factor = rsi < 30 ? 1.0 : 
+                 rsi > 70 ? -1.0 :
+                 rsi < 45 ? 0.5 :
+                 rsi > 55 ? -0.5 : 0.0
+                 
+    // 3. MACD фактор
+    macd_factor = macd > signal and macd > 0 ? 1.0 :
+                  macd < signal and macd < 0 ? -1.0 :
+                  macd > signal ? 0.5 :
+                  macd < signal ? -0.5 : 0.0
+    
+    // 4. Вычисляем вес каждого фактора в зависимости от истории успеха
+    ma_weight = 0.4
+    rsi_weight = 0.3
+    macd_weight = 0.3
+    
+    // 5. Если включен ML, корректируем веса на основе истории
+    if enableML
+        // Анализ последних N баров для определения успешности предыдущих сигналов
+        success_rate = array.avg(recentSuccess)
+        
+        if success_rate > 0.6  // Если более 60% успешных сделок
+            // Увеличиваем вес более успешных факторов
+            if math.abs(ma_factor) > math.abs(rsi_factor) and math.abs(ma_factor) > math.abs(macd_factor)
+                ma_weight := 0.5
+                rsi_weight := 0.25
+                macd_weight := 0.25
+            else if math.abs(rsi_factor) > math.abs(ma_factor) and math.abs(rsi_factor) > math.abs(macd_factor)
+                ma_weight := 0.3
+                rsi_weight := 0.5
+                macd_weight := 0.2
+            else
+                ma_weight := 0.3
+                rsi_weight := 0.2
+                macd_weight := 0.5
+    
+    // 6. Рассчитываем итоговую оценку тренда
+    trend_score = ma_factor * ma_weight + rsi_factor * rsi_weight + macd_factor * macd_weight
+    
+    // 7. Обновляем историю успеха (пример: если предсказание положительное и цена пошла вверх)
+    if bar_index > 20
+        predicted = array.get(recentSuccess, 0)
+        realized = close > close[5] ? 1.0 : 0.0  // Простая проверка: выросла ли цена за 5 баров
+        success = predicted > 0.5 and realized == 1.0 ? 1.0 : 
+                  predicted < 0.5 and realized == 0.0 ? 1.0 : 0.0
+        
+        // Обновляем историю скользящим образом
+        array.shift(recentSuccess)
+        array.push(recentSuccess, success)
+    
+    trend_score
+
+// Функция для расчета объемных индикаторов
+calculateVolumeIndicators(price, vol) =>
+    // On-Balance Volume
+    obv_raw = ta.cum(math.sign(price - price[1]) * vol)
+    obv_smooth = ta.sma(obv_raw, obv_length)
+    
+    // Money Flow Index
+    mfi = ta.mfi(price, vol, mfi_length)
+    
+    // Оценка объема
+    vol_avg = ta.sma(vol, volumeLength)
+    vol_ratio = vol / vol_avg
+    
+    [obv_raw, obv_smooth, mfi, vol_ratio]
+
+//------------------------------ ОСНОВНЫЕ РАСЧЕТЫ ------------------------------//
+// Получение цен и объема
+src = close
+vol = volume
+
+// Расчет скользящих средних
+fastMA = getMA(src, fastLength, fastType)
+slowMA = getMA(src, slowLength, slowType)
+longMA = getMA(src, longLength, longType)
+
+// Расчет осцилляторов
+rsiValue = ta.rsi(src, rsiLength)
+[macdLine, signalLine, histLine] = ta.macd(src, macdFast, macdSlow, macdSignal)
+
+// Расчет объемных индикаторов
+[obv, obv_sma, mfi, vol_ratio] = calculateVolumeIndicators(src, vol)
+
+// Мультитаймфреймовый анализ
+var higher_trend = 0.0
+var higher_rsi = 0.0
+var higher_macd = 0.0
+
+if useMTF
+    higher_src = getMtfData(src, mtfRatio)
+    higher_fastMA = getMtfData(getMA(src, fastLength, fastType), mtfRatio)
+    higher_slowMA = getMtfData(getMA(src, slowLength, slowType), mtfRatio)
+    higher_longMA = getMtfData(getMA(src, longLength, longType), mtfRatio)
+    higher_rsi = getMtfData(rsiValue, mtfRatio)
+    [higher_macd, higher_signal, _] = ta.macd(higher_src, macdFast, macdSlow, macdSignal)
+    
+    // Оценка тренда на старшем таймфрейме
+    if higher_fastMA > higher_slowMA and higher_slowMA > higher_longMA
+        higher_trend := 1.0
+    else if higher_fastMA < higher_slowMA and higher_slowMA < higher_longMA
+        higher_trend := -1.0
+    else
+        higher_trend := 0.0
+
+// Определение уровней поддержки и сопротивления
+[resistanceLevels, supportLevels] = detectSRLevels(srPeriod, srStrength, srDistance)
+
+// Прогнозирование тренда с использованием статистического анализа
+prediction = predictiveTrend(src, fastMA, slowMA, longMA, rsiValue, macdLine, signalLine)
+
+// Ключевые сигналы для входа в рынок
+// 1. Основные сигналы по пересечению
+bullishCross = ta.crossover(fastMA, slowMA)
+bearishCross = ta.crossunder(fastMA, slowMA)
+
+// 2. Дополнительные фильтры и усиление сигналов
+macd_bullish = macdLine > signalLine and macdLine > macdLine[1]
+macd_bearish = macdLine < signalLine and macdLine < macdLine[1]
+rsi_bullish = rsiValue < 50 and rsiValue > rsiValue[1]
+rsi_bearish = rsiValue > 50 and rsiValue < rsiValue[1]
+vol_bullish = useVolume ? vol_ratio > 1.2 and obv > obv[1] : true
+vol_bearish = useVolume ? vol_ratio > 1.2 and obv < obv[1] : true
+
+// 3. Уровни поддержки и сопротивления
+near_support = false
+near_resistance = false
+
+if useSR
+    for i = 0 to math.min(array.size(supportLevels) - 1, 5)  // Проверяем до 5 ближайших уровней
+        support_level = array.get(supportLevels, i)
+        if low >= support_level * 0.995 and low <= support_level * 1.01
+            near_support := true
+            break
+            
+    for i = 0 to math.min(array.size(resistanceLevels) - 1, 5)
+        resistance_level = array.get(resistanceLevels, i)
+        if high <= resistance_level * 1.005 and high >= resistance_level * 0.99
+            near_resistance := true
+            break
+
+// 4. Учитываем мультитаймфрейм
+mtf_aligned_bullish = useMTF ? higher_trend > 0 : true
+mtf_aligned_bearish = useMTF ? higher_trend < 0 : true
+
+// 5. Интеграция ML/предиктивного анализа
+ml_bullish = prediction > 0.3
+ml_bearish = prediction < -0.3
+
+// 6. Сила сигнала (от 0 до 100)
+buy_strength = 0.0
+sell_strength = 0.0
+
+// Базовая сила от пересечения MA (до 40 пунктов)
+if bullishCross
+    buy_strength := 40
+if bearishCross
+    sell_strength := 40
+
+// Дополнительно от осцилляторов (до 20 пунктов)
+if macd_bullish
+    buy_strength += 10
+if rsi_bullish
+    buy_strength += 10
+if macd_bearish
+    sell_strength += 10
+if rsi_bearish
+    sell_strength += 10
+
+// Дополнительно от объема (до 10 пунктов)
+if vol_bullish
+    buy_strength += 10
+if vol_bearish
+    sell_strength += 10
+
+// Дополнительно от близости к уровням (до 10 пунктов)
+if near_support
+    buy_strength += 10
+if near_resistance
+    sell_strength += 10
+
+// Дополнительно от мультитаймфрейма (до 10 пунктов)
+if mtf_aligned_bullish
+    buy_strength += 10
+if mtf_aligned_bearish
+    sell_strength += 10
+
+// Дополнительно от ML (до 10 пунктов)
+if ml_bullish
+    buy_strength += 10
+if ml_bearish
+    sell_strength += 10
+
+// Проверка на перекупленность/перепроданность
+if rsiValue > rsiOverbought
+    buy_strength *= 0.7  // Снижаем силу сигналов на покупку
+if rsiValue < rsiOversold
+    sell_strength *= 0.7  // Снижаем силу сигналов на продажу
+
+// Финальные сигналы с учетом силы и всех факторов
+strongBuy = bullishCross and buy_strength >= 70 and src > longMA
+strongSell = bearishCross and sell_strength >= 70 and src < longMA
+
+//------------------------------ УПРАВЛЕНИЕ СИГНАЛАМИ И ТОРГОВЛЕЙ ------------------------------//
+// Логика входа и выхода для торговой стратегии
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit = na
+
+// Управление входами
+if useStrategy
+    // Вход в покупку
+    if strongBuy
+        strategy.entry("Long", strategy.long)
+        entryPrice := close
+        stopLoss := close * (1 - stopLossPercent / 100)
+        takeProfit := close * (1 + takeProfitPercent / 100)
+    
+    // Вход в продажу
+    if strongSell
+        strategy.entry("Short", strategy.short)
+        entryPrice := close
+        stopLoss := close * (1 + stopLossPercent / 100)  // Для шорта стоп выше входа
+        takeProfit := close * (1 - takeProfitPercent / 100)  // Для шорта тейк ниже входа
+
+    // Управление стоп-лоссом
+    if useStopLoss and not na(entryPrice)
+        if strategy.position_size > 0  // В длинной позиции
+            strategy.exit("SL/TP", "Long", stop=stopLoss, limit=takeProfit)
+        else if strategy.position_size < 0  // В короткой позиции
+            strategy.exit("SL/TP", "Short", stop=stopLoss, limit=takeProfit)
+    
+    // Трейлинг-стоп
+    if useTrailingStop and strategy.position_size != 0
+        trail_price = strategy.position_size > 0 ? 
+                     high * (1 - trailingStopPercent / 100) : 
+                     low * (1 + trailingStopPercent / 100)
+        strategy.exit("Trail", trail_price=trail_price)
+
+// Создание уведомлений
+if useAlerts
+    alertcondition(strongBuy, "QuantumTrade PRO - Сигнал на покупку", "Сильный сигнал на ПОКУПКУ! Сила: " + str.tostring(math.round(buy_strength)) + "/100")
+    alertcondition(strongSell, "QuantumTrade PRO - Сигнал на продажу", "Сильный сигнал на ПРОДАЖУ! Сила: " + str.tostring(math.round(sell_strength)) + "/100")
+
+//------------------------------ ВИЗУАЛИЗАЦИЯ ------------------------------//
+// Расчет динамических цветов
+getDynamicColor(isUp, baseCol, intensity) =>
+    if colorMode == "Динамический"
+        colorIntensity = math.min(math.max(intensity / 100, 0), 1)
+        if isUp
+            color.from_gradient(colorIntensity, 0, 1, color.new(color.white, 70), buyColor)
+        else
+            color.from_gradient(colorIntensity, 0, 1, color.new(color.white, 70), sellColor)
+    else
+        if isUp
+            buyColor
+        else
+            sellColor
+
+// Отрисовка скользящих средних с динамическими цветами
+fastColor = getDynamicColor(fastMA > fastMA[1], baseColor, 100)
+slowColor = getDynamicColor(slowMA > slowMA[1], baseColor, 80)
+longColor = getDynamicColor(longMA > longMA[1], baseColor, 60)
+
+plot(fastMA, "Быстрая MA", color=fastColor, linewidth=2)
+plot(slowMA, "Медленная MA", color=slowColor, linewidth=2)
+plot(longMA, "Длинная MA", color=longColor, linewidth=1)
+
+// Отрисовка уровней поддержки и сопротивления
+if useSR
+    for i = 0 to math.min(array.size(resistanceLevels) - 1, 5)
+        level = array.get(resistanceLevels, i)
+        line.new(bar_index - 50, level, bar_index, level, 
+                 xloc=xloc.bar_index, color=color.new(color.red, 30), style=line.style_dashed, width=2)
+        label.new(bar_index, level, "R" + str.tostring(i+1), 
+                 color=color.new(color.red, 80), style=label.style_label_down, 
+                 textcolor=color.white, size=size.small, xloc=xloc.bar_index)
+    
+    for i = 0 to math.min(array.size(supportLevels) - 1, 5)
+        level = array.get(supportLevels, i)
+        line.new(bar_index - 50, level, bar_index, level, 
+                 xloc=xloc.bar_index, color=color.new(color.green, 30), style=line.style_dashed, width=2)
+        label.new(bar_index, level, "S" + str.tostring(i+1), 
+                 color=color.new(color.green, 80), style=label.style_label_up, 
+                 textcolor=color.white, size=size.small, xloc=xloc.bar_index)
+
+// Отрисовка сигналов
+plotshape(strongBuy, title="Сигнал покупки", location=location.belowbar, 
+          color=buyColor, style=shape.triangleup, size=size.normal)
+plotshape(strongSell, title="Сигнал продажи", location=location.abovebar, 
+          color=sellColor, style=shape.triangledown, size=size.normal)
+
+// Отображение силы сигнала
+if showLabels and (strongBuy or strongSell)
+    strength_value = strongBuy ? buy_strength : sell_strength
+    label_text = strongBuy ? "↑ BUY: " + str.tostring(math.round(strength_value)) : 
+                            "↓ SELL: " + str.tostring(math.round(strength_value))
+    label_color = strongBuy ? color.new(buyColor, 20) : color.new(sellColor, 20)
+    label.new(bar_index, strongBuy ? low * 0.998 : high * 1.002, 
+              label_text, color=label_color, textcolor=color.white, 
+              style=strongBuy ? label.style_label_up : label.style_label_down, 
+              size=size.small, xloc=xloc.bar_index)
+
+// Создание информационной панели
+if showDashboard
+    // Определяем позицию панели
+    panel_position = switch dashboardPosition
+        "Левый верхний" => position.top_left
+        "Правый верхний" => position.top_right
+        "Левый нижний" => position.bottom_left
+        => position.bottom_right
+    
+    var table dashboardTable = table.new(panel_position, 2, 10, bgcolor=color.new(color.black, 80), border_width=1, border_color=color.new(color.white, 90))
+    
+    // Заголовок таблицы
+    table.cell(dashboardTable, 0, 0, "QuantumTrade PRO", text_color=color.white, bgcolor=color.new(baseColor, 10), text_size=size.normal)
+    table.cell(dashboardTable, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=color.new(baseColor, 10), text_size=size.normal)
+    
+    // Текущий тренд
+    trendText = fastMA > slowMA and slowMA > longMA ? "Восходящий" : 
+                fastMA < slowMA and slowMA < longMA ? "Нисходящий" : 
+                "Смешанный"
+                
+    trendColor = trendText == "Восходящий" ? color.new(buyColor, 70) : 
+                trendText == "Нисходящий" ? color.new(sellColor, 70) : 
+                color.new(color.gray, 70)
+                
+    table.cell(dashboardTable, 0, 1, "Тренд:", text_color=color.white)
+    table.cell(dashboardTable, 1, 1, trendText, bgcolor=trendColor, text_color=color.white)
+    
+    // МТФ-тренд
+    if useMTF
+        mtfTrendText = higher_trend > 0 ? "Восходящий" : 
+                      higher_trend < 0 ? "Нисходящий" : 
+                      "Нейтральный"
+                      
+        mtfTrendColor = higher_trend > 0 ? color.new(buyColor, 70) : 
+                       higher_trend < 0 ? color.new(sellColor, 70) : 
+                       color.new(color.gray, 70)
+                       
+        table.cell(dashboardTable, 0, 2, "MTF Тренд:", text_color=color.white)
+        table.cell(dashboardTable, 1, 2, mtfTrendText, bgcolor=mtfTrendColor, text_color=color.white)
+    else
+        table.cell(dashboardTable, 0, 2, "MTF Тренд:", text_color=color.white)
+        table.cell(dashboardTable, 1, 2, "Выключен", text_color=color.white)
+    
+    // RSI
+    rsiColor = rsiValue > rsiOverbought ? color.new(sellColor, 70) :
+              rsiValue < rsiOversold ? color.new(buyColor, 70) :
+              color.new(color.gray, 70)
+              
+    table.cell(dashboardTable, 0, 3, "RSI:", text_color=color.white)
+    table.cell(dashboardTable, 1, 3, str.tostring(math.round(rsiValue, 1)), bgcolor=rsiColor, text_color=color.white)
+    
+    // MACD
+    macdText = macdLine > signalLine ? "Бычий" : "Медвежий"
+    macdColor = macdLine > signalLine ? color.new(buyColor, 70) : color.new(sellColor, 70)
+    
+    table.cell(dashboardTable, 0, 4, "MACD:", text_color=color.white)
+    table.cell(dashboardTable, 1, 4, macdText, bgcolor=macdColor, text_color=color.white)
+    
+    // Объем
+    if useVolume
+        volText = vol_ratio > 1.5 ? "Очень высокий" :
+                 vol_ratio > 1.2 ? "Высокий" :
+                 vol_ratio < 0.8 ? "Низкий" : "Средний"
+                 
+        volColor = vol_ratio > 1.2 ? color.new(color.blue, 70) :
+                  vol_ratio < 0.8 ? color.new(color.gray, 70) :
+                  color.new(color.white, 90)
+                  
+        table.cell(dashboardTable, 0, 5, "Объем:", text_color=color.white)
+        table.cell(dashboardTable, 1, 5, volText, bgcolor=volColor, text_color=color.white)
+    else
+        table.cell(dashboardTable, 0, 5, "Объем:", text_color=color.white)
+        table.cell(dashboardTable, 1, 5, "Выключен", text_color=color.white)
+    
+    // ML/Предиктивный анализ
+    predText = prediction > 0.5 ? "Сильный рост" :
+              prediction > 0.2 ? "Вероятно рост" :
+              prediction < -0.5 ? "Сильное снижение" :
+              prediction < -0.2 ? "Вероятно снижение" :
+              "Нейтральный"
+              
+    predColor = prediction > 0.2 ? color.new(buyColor, 70) :
+               prediction < -0.2 ? color.new(sellColor, 70) :
+               color.new(color.gray, 70)
+               
+    table.cell(dashboardTable, 0, 6, "Прогноз:", text_color=color.white)
+    table.cell(dashboardTable, 1, 6, predText, bgcolor=predColor, text_color=color.white)
+    
+    // Сигналы
+    signalText = strongBuy ? "СИЛЬНАЯ ПОКУПКА" :
+                strongSell ? "СИЛЬНАЯ ПРОДАЖА" :
+                buy_strength > sell_strength and buy_strength > 50 ? "Покупка" :
+                sell_strength > buy_strength and sell_strength > 50 ? "Продажа" :
+                "Нет сигнала"
+                
+    signalColor = signalText == "СИЛЬНАЯ ПОКУПКА" ? color.new(buyColor, 20) :
+                 signalText == "СИЛЬНАЯ ПРОДАЖА" ? color.new(sellColor, 20) :
+                 signalText == "Покупка" ? color.new(buyColor, 60) :
+                 signalText == "Продажа" ? color.new(sellColor, 60) :
+                 color.new(color.gray, 70)
+                 
+    table.cell(dashboardTable, 0, 7, "Сигнал:", text_color=color.white)
+    table.cell(dashboardTable, 1, 7, signalText, bgcolor=signalColor, text_color=color.white)
+    
+    // Сила сигнала
+    scoreText = buy_strength > sell_strength ? 
+                str.tostring(math.round(buy_strength)) + "/100 ↑" : 
+                str.tostring(math.round(sell_strength)) + "/100 ↓"
+                
+    scoreColor = buy_strength > sell_strength ? color.new(buyColor, math.max(90 - buy_strength, 30)) :
+                color.new(sellColor, math.max(90 - sell_strength, 30))
+                
+    table.cell(dashboardTable, 0, 8, "Сила:", text_color=color.white)
+    table.cell(dashboardTable, 1, 8, scoreText, bgcolor=scoreColor, text_color=color.white)
+    
+    // Текущая позиция (для режима стратегии)
+    if useStrategy
+        posText = strategy.position_size > 0 ? "В ЛОНГЕ" :
+                 strategy.position_size < 0 ? "В ШОРТЕ" :
+                 "Нет позиции"
+                 
+        posColor = strategy.position_size > 0 ? color.new(buyColor, 50) :
+                  strategy.position_size < 0 ? color.new(sellColor, 50) :
+                  color.new(color.gray, 70)
+                  
+        table.cell(dashboardTable, 0, 9, "Позиция:", text_color=color.white)
+        table.cell(dashboardTable, 1, 9, posText, bgcolor=posColor, text_color=color.white)
+    else
+        table.cell(dashboardTable, 0, 9, "🔍", text_color=color.white)
+        table.cell(dashboardTable, 1, 9, "v1.0", text_color=color.white)
+
+//------------------------------ КОММЕНТАРИИ ------------------------------//
+// QuantumTrade PRO - расширенный скрипт для профессионального трейдинга
+// Особенности:
+// 1. Мультитаймфреймовый анализ для подтверждения сигналов
+// 2. Автоматическое определение ключевых уровней поддержки и сопротивления
+// 3. Анализ объема с использованием OBV и MFI
+// 4. Адаптивный алгоритм (элементы ML) для улучшения сигналов на основе истории
+// 5. Полноценный бэктестинг с управлением рисками (стоп-лосс, тейк-профит, трейлинг-стоп)
+// 6. Динамическая система оценки силы сигналов
+// 7. Профессиональная информационная панель
+// 8. Настраиваемая визуализация
